@@ -111,13 +111,17 @@
   #feed::-webkit-scrollbar { width:0; }
 
   /* gaze/gesture cursor + dwell — shown ONLY in gaze mode (never for the mouse) */
-  #cursor { position:fixed; z-index:9; width:26px; height:26px; margin:-13px 0 0 -13px; border-radius:50%; pointer-events:none; display:none;
-            background:radial-gradient(circle, rgba(47,107,255,.9) 0 26%, rgba(47,107,255,.18) 56%, transparent 68%);
-            box-shadow:0 0 22px rgba(47,107,255,.6); transition:transform .06s; }
-  #cursor.pinch { transform:scale(.5); }
+  #cursor { position:fixed; z-index:9; width:30px; height:30px; margin:-15px 0 0 -15px; border-radius:50%; pointer-events:none; display:none;
+            background:radial-gradient(circle, rgba(47,107,255,.95) 0 26%, rgba(47,107,255,.2) 56%, transparent 68%);
+            box-shadow:0 0 26px rgba(47,107,255,.7); transition:width .18s, height .18s, margin .18s; }
+  #cursor.pinch { background:radial-gradient(circle, #fff 0 42%, rgba(255,255,255,.35) 62%, transparent 72%); }
+  #cursor.dwelling { width:74px; height:74px; margin:-37px 0 0 -37px; }
   body.gaze #cursor { display:block; }
-  #dwell { position:absolute; inset:-9px; }
-  #dwell circle { fill:none; stroke:var(--accent); stroke-width:3; stroke-dasharray:126; stroke-dashoffset:126; transform:rotate(-90deg); transform-origin:center; }
+  #dwell { position:absolute; inset:-10px; }
+  #dwell circle { fill:none; stroke:var(--accent); stroke-width:6; stroke-dasharray:126; stroke-dashoffset:126; transform:rotate(-90deg); transform-origin:center;
+                  filter:drop-shadow(0 0 7px rgba(47,107,255,.8)); transition:stroke-dashoffset .05s linear; }
+  @keyframes snap { 0%{ transform:var(--rest) scale(1.16);} 45%{ transform:var(--rest) scale(.9);} 100%{ transform:var(--rest) scale(1);} }
+  .key.snap { animation:snap .36s cubic-bezier(.34,1.56,.64,1); }
 
   #pip { position:fixed; right:16px; bottom:16px; z-index:7; width:150px; border-radius:14px; overflow:hidden;
          border:1px solid var(--glassbrd); background:#0004; box-shadow:var(--shadow); }
@@ -169,7 +173,7 @@
   <div class="key opt empty" data-slot="4"><span class="accent"></span><span class="lab"></span></div>
   <div class="key opt empty" data-slot="5"><span class="accent"></span><span class="lab"></span></div>
 
-  <div id="leds"><div class="led" id="led-cam"></div><div class="led" id="led-hand"></div><div class="led" id="led-srv"></div></div>
+  <div id="leds"><div class="led" id="led-cam" title="camera"></div><div class="led" id="led-face" title="face tracking"></div><div class="led" id="led-hand" title="hand tracking"></div><div class="led" id="led-srv" title="server"></div></div>
   <div id="hud">
     <button id="b-voice" title="Spoken replies"><svg viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16 9a4 4 0 0 1 0 6"/><path d="M18.5 7a7 7 0 0 1 0 10"/></svg></button>
     <button id="b-new" title="New conversation"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
@@ -439,13 +443,15 @@ function pinchDown(){ if (state.pinch) return; state.pinch=true; cursor.classLis
   if (state.hoverKey?.id==="k-talk") talkStart(); }
 function pinchUp(){ if (!state.pinch) return; state.pinch=false; cursor.classList.remove("pinch");
   if (state.hoverKey){ state.hoverKey.id==="k-talk" ? talkEnd() : press(state.hoverKey); } }
-setInterval(() => {  // dwell = stare-to-select (gaze mode only; never mouse, never the talk heart)
+setInterval(() => {  // dwell = hold the pointer on a portal to select (hands-free; never mouse, never the talk heart)
   if (state.deskMode || !state.hoverKey || state.pinch || state.busy || state.dwellFired || state.hoverKey.id==="k-talk"){
-    dwellCircle.style.strokeDashoffset=126; return; }
-  const t=(performance.now()-state.dwellStart)/1100;
+    dwellCircle.style.strokeDashoffset=126; cursor.classList.remove("dwelling"); return; }
+  cursor.classList.add("dwelling");
+  const t=(performance.now()-state.dwellStart)/2500;   // ~2.5s hold; the orb fills, then snaps
   dwellCircle.style.strokeDashoffset=Math.max(0,126*(1-t));
-  if (t>=1){ state.dwellFired=true; press(state.hoverKey); }
-}, 50);
+  if (t>=1){ state.dwellFired=true; cursor.classList.remove("dwelling");
+    const el=state.hoverKey; el.classList.add("snap"); setTimeout(()=>el.classList.remove("snap"),360); press(el); }
+}, 40);
 
 /* ───────── desk (mouse) ↔ camera (gaze + pinch) ───────── */
 let camReady=false, camStarted=false;
@@ -470,14 +476,18 @@ async function initCamera(){
     const pip=$("pipc"), pctx=pip.getContext("2d"); let sx=.5, sy=.5;
     const loop=()=>{ const now=performance.now(); const f=face.detectForVideo(cam,now), h=hand.detectForVideo(cam,now);
       pip.width=pip.clientWidth; pip.height=pip.clientHeight; pctx.clearRect(0,0,pip.width,pip.height);
-      let nx=null, ny=null, gain=1.6;
-      if (h.landmarks?.length){ $("led-hand").className="led on"; const lm=h.landmarks[0], tip=lm[8], th=lm[4];
-        nx=tip.x; ny=tip.y; gain=1.25; const span=Math.hypot(lm[0].x-lm[9].x, lm[0].y-lm[9].y);
-        const d=Math.hypot(tip.x-th.x, tip.y-th.y)/(span||1); d<.38 ? pinchDown() : (d>.5 && pinchUp());
-        pctx.fillStyle="#2f6bff"; for (const p of [tip,th]){ pctx.beginPath(); pctx.arc((1-p.x)*pip.width, p.y*pip.height, 4, 0, 7); pctx.fill(); } }
-      else { $("led-hand").className="led"; pinchUp(); }
-      if (nx===null && f.faceLandmarks?.length){ const iL=f.faceLandmarks[0][468], iR=f.faceLandmarks[0][473]; nx=(iL.x+iR.x)/2; ny=(iL.y+iR.y)/2+.06; }
-      if (nx!==null && !state.deskMode){ const tx=(.5-(nx-.5)*gain), ty=(.5+(ny-.5)*gain); sx+=(tx-sx)*.28; sy+=(ty-sy)*.28; moveCursor(sx*innerWidth, sy*innerHeight); }
+      let px=null, py=null;   // mirrored, screen-normalized pointer (0..1)
+      if (h.landmarks?.length){ $("led-hand").className="led on"; if($("led-face"))$("led-face").className="led";
+        const lm=h.landmarks[0], tip=lm[8], th=lm[4];
+        px = 1 - tip.x; py = tip.y;                          // your INDEX FINGER is the pointer (tunneler-style, direct)
+        const d=Math.hypot(tip.x-th.x, tip.y-th.y);          // raw thumb–index distance
+        d < .055 ? pinchDown() : (d > .09 && pinchUp());     // pinch to select, release to let go (hysteresis)
+        pctx.fillStyle="#2f6bff"; for (const p of [tip,th]){ pctx.beginPath(); pctx.arc((1-p.x)*pip.width, p.y*pip.height, 5, 0, 7); pctx.fill(); } }
+      else { $("led-hand").className="led"; pinchUp();
+        if (f.faceLandmarks?.length){ if($("led-face"))$("led-face").className="led on";   // no hand → point with your head (nose)
+          const nose=f.faceLandmarks[0][1]||f.faceLandmarks[0][4]; if (nose){ px = .5-(nose.x-.5)*2.6; py = .5+(nose.y-.5)*2.6; } }
+        else if ($("led-face")) $("led-face").className="led"; }
+      if (px!==null && !state.deskMode){ sx+=(px-sx)*.35; sy+=(py-sy)*.35; moveCursor(sx*innerWidth, sy*innerHeight); }
       requestAnimationFrame(loop); };
     loop();
   } catch(e){ setDeskMode(true); promptEl.textContent="No camera available — staying in the menu (click to choose)."; }
