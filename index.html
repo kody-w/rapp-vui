@@ -30,6 +30,13 @@
   #mirror { position:fixed; inset:0; z-index:1; pointer-events:none; opacity:0; transition:opacity .5s ease;
             background:radial-gradient(120% 90% at 50% 38%, rgba(255,255,255,.96), rgba(255,255,255,.35) 55%, rgba(255,255,255,0) 78%); }
   body.lit #mirror { opacity:.9; }
+  /* finger spotlight: a soft glow in the background showing the detected finger; tightens + brightens on pinch */
+  #fingerspot { position:fixed; z-index:1; width:170px; height:170px; margin:-85px 0 0 -85px; border-radius:50%; pointer-events:none; opacity:0;
+                background:radial-gradient(circle, rgba(47,107,255,.26) 0 28%, rgba(47,107,255,.10) 56%, transparent 72%);
+                transition:opacity .25s ease, width .16s ease, height .16s ease, margin .16s ease, background .16s ease; }
+  #fingerspot.show { opacity:1; }
+  #fingerspot.pinch { width:86px; height:86px; margin:-43px 0 0 -43px;
+                      background:radial-gradient(circle, rgba(47,107,255,.55) 0 34%, rgba(47,107,255,.22) 60%, transparent 74%); }
 
   #stage { position:fixed; inset:0; z-index:2; }
   #prompt { position:fixed; top:8.5vh; left:50%; transform:translateX(-50%); z-index:6; text-align:center;
@@ -100,7 +107,8 @@
      center, so a corner is the one region it never reaches. Never overlaps a portal. */
   #feed { position:fixed; left:16px; bottom:16px; z-index:5; width:min(330px,40vw);
           max-height:38vh; overflow-y:auto; font-size:.9rem; line-height:1.5;
-          padding:12px 16px; border-radius:16px; background:var(--glass); border:1px solid var(--glassbrd); box-shadow:var(--shadow); backdrop-filter:blur(20px); }
+          padding:12px 16px; border-radius:16px; background:var(--glass); border:1px solid var(--glassbrd); box-shadow:var(--shadow); backdrop-filter:blur(20px);
+          transition:top .35s cubic-bezier(.22,1,.36,1), left .35s cubic-bezier(.22,1,.36,1), right .35s cubic-bezier(.22,1,.36,1), bottom .35s cubic-bezier(.22,1,.36,1); }
   #feed .u { color:var(--accent); font-weight:500; font-size:.82rem; margin-bottom:.15em; }
   #feed .a { color:var(--ink); margin-bottom:.7em; position:relative; }
   #feed .a:last-child { margin-bottom:0; }
@@ -160,6 +168,7 @@
 <body>
 <canvas id="object"></canvas>
 <div id="mirror"></div>
+<div id="fingerspot"></div>
 <div id="stage">
   <div id="prompt">Speak, or choose where to go.</div>
 
@@ -437,10 +446,20 @@ $("b-new").addEventListener("click", () => { feed.innerHTML=""; state.history=[]
 
 /* ───────── cursor: gaze/gesture only (mouse uses the native cursor) ───────── */
 const cursor=$("cursor"), dwellCircle=document.querySelector("#dwell circle");
+let gx=.5, gy=.5, faceOrigin=null;   // smoothed pointer + head-pose calibration origin
+function recenterPointer(){          // after a selection: pointer back to middle, recalibrate neutral head pose
+  gx=.5; gy=.5; faceOrigin=null; state.hoverKey?.classList.remove("hover"); state.hoverKey=null; state.dwellFired=true;
+  if (!state.deskMode) moveCursor(innerWidth/2, innerHeight/2);
+}
 function moveCursor(x,y){ cursor.style.left=x+"px"; cursor.style.top=y+"px";
   const el=document.elementFromPoint(x,y)?.closest(".key");
-  if (el!==state.hoverKey){ state.hoverKey?.classList.remove("hover"); state.hoverKey=el;
-    state.dwellStart=performance.now(); state.dwellFired=false; el?.classList.add("hover"); } }
+  if (el){                                   // over a target
+    if (el!==state.hoverKey){ state.hoverKey?.classList.remove("hover"); state.hoverKey=el; el.classList.add("hover");
+      state.dwellStart=performance.now(); state.dwellFired=false; }
+    state.lastSeen=performance.now();
+  } else if (state.hoverKey && performance.now()-(state.lastSeen||0) > 450){   // STICKY: tolerate brief tracking jitter off-target
+    state.hoverKey.classList.remove("hover"); state.hoverKey=null;
+  } }
 function pinchDown(){ if (state.pinch) return; state.pinch=true; cursor.classList.add("pinch");
   if (state.hoverKey?.id==="k-talk") talkStart(); }
 function pinchUp(){ if (!state.pinch) return; state.pinch=false; cursor.classList.remove("pinch");
@@ -475,15 +494,16 @@ async function initCamera(){
     const hand=await vision.HandLandmarker.createFromOptions(files,{ baseOptions:{ modelAssetPath:"https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task" }, runningMode:"VIDEO", numHands:1 });
     const cam=$("cam"); cam.srcObject=await navigator.mediaDevices.getUserMedia({ video:{ width:640, height:480 } }); await cam.play();
     camReady=true; $("led-cam").className="led on"; body.classList.add("gaze"); $("pip").classList.remove("hidden");
-    const pip=$("pipc"), pctx=pip.getContext("2d"); let sx=.5, sy=.5;
+    const pip=$("pipc"), pctx=pip.getContext("2d"), fingerspot=$("fingerspot"); let sx=.5, sy=.5;
     const loop=()=>{ const now=performance.now(); const f=face.detectForVideo(cam,now), h=hand.detectForVideo(cam,now);
       pip.width=pip.clientWidth; pip.height=pip.clientHeight; pctx.clearRect(0,0,pip.width,pip.height);
       let px=null, py=null;   // mirrored, screen-normalized pointer (0..1)
       if (h.landmarks?.length){ $("led-hand").className="led on"; if($("led-face"))$("led-face").className="led";
         const lm=h.landmarks[0], tip=lm[8], th=lm[4];
         px = 1 - tip.x; py = tip.y;                          // your INDEX FINGER is the pointer (tunneler-style, direct)
-        const d=Math.hypot(tip.x-th.x, tip.y-th.y);          // raw thumb–index distance
-        d < .055 ? pinchDown() : (d > .09 && pinchUp());     // pinch to select, release to let go (hysteresis)
+        const span=Math.hypot(lm[0].x-lm[9].x, lm[0].y-lm[9].y) || .15;   // hand size — makes pinch SCALE-INVARIANT
+        const d=Math.hypot(tip.x-th.x, tip.y-th.y)/span;     // thumb–index gap relative to the hand (near or far, same)
+        d < .40 ? pinchDown() : (d > .62 && pinchUp());      // pinch to select, open to release (hysteresis)
         pctx.fillStyle="#2f6bff"; for (const p of [tip,th]){ pctx.beginPath(); pctx.arc((1-p.x)*pip.width, p.y*pip.height, 5, 0, 7); pctx.fill(); } }
       else { $("led-hand").className="led"; pinchUp();
         if (f.faceLandmarks?.length){ if($("led-face"))$("led-face").className="led on";   // no hand → point with your head (nose)
