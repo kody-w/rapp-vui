@@ -57,6 +57,39 @@ making that one interaction feel effortless. Build and tune it first, alone.
 | **Mouse** | fallback menu ONLY | native cursor + click; **no gaze glow / dwell ring in mouse mode** |
 | **Dwell** | optional gaze fallback | stare-to-select for gaze users with no free hand |
 
+### 7.1.1 Two modes (DECIDED — do not auto-blend)
+
+Auto-blending hand-pointing and head-pointing in one loop is confusing and
+untunable. Ship **two explicit, toggleable modes**, each optimized alone:
+
+- **Gesture mode** — index-finger tip is the pointer (direct, mirrored, like the
+  tunneler); **pinch to select** the target under the cursor *instantly* (select
+  on pinch-down, once per pinch — the tunneler's `handlePinch` model that felt
+  great). No face tracking active.
+- **Eye/Head mode** — the head (nose) is the pointer; **dwell to select** (hold
+  the pointer on a target ~2–2.5s; a progress orb fills, then a satisfying
+  **snap**). No hand needed, no pinch.
+
+The mouse view is a third, trivial fallback: it's just the menu (click).
+
+### 7.1.2 Tuning rules learned from live testing (bake these in)
+
+- **Pinch must be SCALE-INVARIANT.** Normalize thumb–index distance by hand span
+  (wrist→middle-MCP). Raw distance makes a far/small hand read as a constant
+  pinch → false-positives that block everything. (Fixed 2026-07-18.)
+- **Sticky hover.** Tolerate ~450ms of tracking jitter off a target before
+  dropping it, or the dwell timer keeps resetting and never fires. (Fixed.)
+- **Re-center + recalibrate after every selection.** Snap the pointer to the
+  middle AND zero the head-pose origin to the user's current position, so the
+  neutral pose maps to center and the user barely moves their head.
+- **The mic is at center.** After re-centering the pointer rests on the mic —
+  holding on it (dwell ~1s) **arms listening**; moving off stops and sends.
+- **Finger spotlight.** Show a soft glow in the background at the detected finger
+  position (tightens/brightens on pinch) so the user sees what's being tracked.
+- **Transcript never covers the orbit.** The options ring is a full circle around
+  center; float the transcript in whichever gutter has the most room (right on
+  ultrawide, corner/top on portrait) — never bottom-center.
+
 ### 7.2 The scene
 - **WebGL2**, Three.js. A **living companion form/orb** at center that reacts to
   state (idle / listening / thinking / speaking) and evolves with the conversation.
